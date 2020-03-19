@@ -3,10 +3,15 @@ from scapy.all import *
 import sqlite3
 import re
 
+# Get all the DNS Answers coming from surce port 53
+# iptables - A INPUT - p udp - -sport 53 - j NFQUEUE - -queue-num 0 - -queue-bypass
+
 def print_and_accept(pkt):
     packet = IP(pkt.get_payload())
     src = packet.src
-    dstport = packet[UDP].dport
+    dst = packet.dst
+    srcport = packet.payload.sport
+    dstport = packet.payload.dport
     hw = pkt.get_hw()
     haddr = ''
     if hw and type(hw[0]) != int:
@@ -29,12 +34,15 @@ def print_and_accept(pkt):
                         dns_query_ip=ip,
                         full_dns_alias_tree=full_dns_list)
             add_row(cursor, values, dns_table_name)
-            print('# DNS: ', values)
-            values = "'{src}','{haddr}'"\
+            print('# DNS:', values)
+            values = "'{src}','{srcport}','{dst}','{dstport}','{haddr}'"\
                 .format(src=src,
+                        srcport=srcport,
+                        dst=dst,
+                        dstport=dstport,
                         haddr=haddr)
             add_row(cursor, values, log_table_name)
-            print('# LOG: ', values)
+            print('# LOG:', values)
     pkt.accept()
 
 def connect(sqlite_file):
@@ -50,9 +58,10 @@ def connect(sqlite_file):
     c.execute('DROP TABLE IF EXISTS {tn}'.format(tn=log_table_name))
     c.execute('CREATE TABLE IF NOT EXISTS {tn} ( \
                 src text, \
+                srcport text, \
                 dst text, \
                 dstport text, \
-                log_text text)'\
+                haddr text)'
               .format(tn=log_table_name))
     return conn, c
 
@@ -61,8 +70,8 @@ def close(conn):
 
 def add_row(cursor, values, table_name):
     try:
-        cursor.execute('INSERT INTO {tn} values ({values})'.format(
-            tn=table_name, values=values))
+        cursor.execute('INSERT INTO {tn} values ({values})'\
+            .format(tn=table_name, values=values))
     except sqlite3.IntegrityError:
         pass
     conn.commit()
