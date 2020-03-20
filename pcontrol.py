@@ -2,92 +2,108 @@ from netfilterqueue import NetfilterQueue
 from scapy.all import *
 import sqlite3
 import re
+# https://realpython.com/intro-to-python-threading/
+import logging
+import threading
+import time
 
 # Get all the DNS Answers coming from surce port 53
 # iptables - A INPUT - p udp - -sport 53 - j NFQUEUE - -queue-num 0 - -queue-bypass
 
-def print_and_accept(pkt):
-    packet = IP(pkt.get_payload())
-    src = packet.src
-    dst = packet.dst
-    srcport = packet.payload.sport
-    dstport = packet.payload.dport
-    hw = pkt.get_hw()
-    haddr = ''
-    if hw and type(hw[0]) != int:
-        haddr = ":".join("{:02x}".format(ord(c)) for c in hw[0:6])
+class DnsParentControl(object):
+    sqlite_file = '/tmp/pcontrol.sqlite'
+    dns_table_name = 'dns_query_tab'
+    log_table_name = 'log_tab'
 
-    dns_answer = packet
-    full_dns_list = ''
-    if dns_answer and DNS in dns_answer:
-        for x in range(dns_answer[DNS].ancount):
-            rrname = dns_answer[DNSRR][x].rrname
-            rdata = dns_answer[DNSRR][x].rdata
-            full_dns_list += (rrname.decode('utf8') if type(rrname) == bytes else rrname) + ':' + \
-                (rdata.decode('utf8') if type(rdata) == bytes else rdata)
-            if (x + 1) < dns_answer[DNS].ancount:
-                full_dns_list += '|'
-        re_c = re.compile(r'[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*')
-        for ip in list(filter(re_c.search, [alias.split(':')[-1] for alias in full_dns_list.split('|')])):
-            values = "'{dns_query_name}','{dns_query_ip}','{full_dns_alias_tree}'"\
-                .format(dns_query_name=full_dns_list.split(':')[0],
-                        dns_query_ip=ip,
-                        full_dns_alias_tree=full_dns_list)
-            add_row(cursor, values, dns_table_name)
-            print('# DNS:', values)
-            values = "'{src}','{srcport}','{dst}','{dstport}','{haddr}'"\
-                .format(src=src,
-                        srcport=srcport,
-                        dst=dst,
-                        dstport=dstport,
-                        haddr=haddr)
-            add_row(cursor, values, log_table_name)
-            print('# LOG:', values)
-    pkt.accept()
+    def __init__(self):
+        self.conn, self.cursor = self.connect()
 
-def connect(sqlite_file):
-    conn = sqlite3.connect(sqlite_file)
-    c = conn.cursor()
-    c.execute('DROP TABLE IF EXISTS {tn}'.format(tn=dns_table_name))
-    c.execute('CREATE TABLE IF NOT EXISTS {tn} ( \
-                dns_query_name text, \
-                dns_query_ip text, \
-                full_dns_alias_tree text, \
-                PRIMARY KEY(dns_query_name, dns_query_ip))'\
-              .format(tn=dns_table_name))
-    c.execute('DROP TABLE IF EXISTS {tn}'.format(tn=log_table_name))
-    c.execute('CREATE TABLE IF NOT EXISTS {tn} ( \
-                src text, \
-                srcport text, \
-                dst text, \
-                dstport text, \
-                haddr text)'
-              .format(tn=log_table_name))
-    return conn, c
+    def connect(self):
+        conn = sqlite3.connect(self.sqlite_file)
+        c = conn.cursor()
+        c.execute('DROP TABLE IF EXISTS {tn}'.format(tn=self.dns_table_name))
+        c.execute('CREATE TABLE IF NOT EXISTS {tn} ( \
+                    dns_query_name text, \
+                    dns_query_ip text, \
+                    full_dns_alias_tree text, \
+                    PRIMARY KEY(dns_query_name, dns_query_ip))'
+                  .format(tn=self.dns_table_name))
+        c.execute('DROP TABLE IF EXISTS {tn}'.format(tn=self.log_table_name))
+        c.execute('CREATE TABLE IF NOT EXISTS {tn} ( \
+                    src text, \
+                    srcport text, \
+                    dst text, \
+                    dstport text, \
+                    haddr text)'
+                  .format(tn=self.log_table_name))
+        return conn, c
 
-def close(conn):
-    conn.close()
+    def add_row(self, values, table_name):
+        try:
+            self.cursor.execute('INSERT INTO {tn} values ({values})'
+                                .format(tn=table_name, values=values))
+        except sqlite3.IntegrityError:
+            pass
+        self.conn.commit()
 
-def add_row(cursor, values, table_name):
-    try:
-        cursor.execute('INSERT INTO {tn} values ({values})'\
-            .format(tn=table_name, values=values))
-    except sqlite3.IntegrityError:
-        pass
-    conn.commit()
+    def close(self):
+        self.conn.close()
 
-sqlite_file = '/tmp/pcontrol.sqlite'
-dns_table_name = 'dns_query_tab'
-log_table_name = 'log_tab'
-conn, cursor = connect(sqlite_file)
+    def dns_decider(self, pkt):
+        packet = IP(pkt.get_payload())
+        src = packet.src
+        dst = packet.dst
+        srcport = packet.payload.sport
+        dstport = packet.payload.dport
+        hw = pkt.get_hw()
+        haddr = ''
+        if hw and type(hw[0]) != int:
+            haddr = ":".join("{:02x}".format(ord(c)) for c in hw[0:6])
 
-nfqueue = NetfilterQueue()
-nfqueue.bind(0, print_and_accept)
+        dns_answer = packet
+        full_dns_list = ''
+        if dns_answer and DNS in dns_answer:
+            for x in range(dns_answer[DNS].ancount):
+                rrname = dns_answer[DNSRR][x].rrname
+                rdata = dns_answer[DNSRR][x].rdata
+                full_dns_list += (rrname.decode('utf8') if type(rrname) == bytes else rrname) + ':' + \
+                    (rdata.decode('utf8') if type(rdata) == bytes else rdata)
+                if (x + 1) < dns_answer[DNS].ancount:
+                    full_dns_list += '|'
+            re_c = re.compile(r'[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*')
+            for ip in list(filter(re_c.search, [alias.split(':')[-1] for alias in full_dns_list.split('|')])):
+                values = "'{dns_query_name}','{dns_query_ip}','{full_dns_alias_tree}'"\
+                    .format(dns_query_name=full_dns_list.split(':')[0],
+                            dns_query_ip=ip,
+                            full_dns_alias_tree=full_dns_list)
+                self.add_row(values, self.dns_table_name)
+                logging.info("# DNS: %s", values)
+                values = "'{src}','{srcport}','{dst}','{dstport}','{haddr}'"\
+                    .format(src=src,
+                            srcport=srcport,
+                            dst=dst,
+                            dstport=dstport,
+                            haddr=haddr)
+                self.add_row(values, self.log_table_name)
+                logging.info("# LOG: %s", values)
+        pkt.accept()
 
-try:
-    nfqueue.run()
-except KeyboardInterrupt:
-    print('')
+    def run(self):
+        nfqueue = NetfilterQueue()
+        nfqueue.bind(0, self.dns_decider)
+        try:
+            nfqueue.run()
+        except KeyboardInterrupt:
+            logging.info("Finishing nfqueue")
+        nfqueue.unbind()
+        self.close()
 
-nfqueue.unbind()
-close(conn)
+if __name__ == "__main__":
+    format = "%(asctime)s: %(message)s"
+    logging.basicConfig(format=format, level=logging.INFO,
+                        datefmt="%H:%M:%S")
+
+    logging.info("%s starting", __file__)
+    dpc = DnsParentControl()
+    dpc.run()
+    logging.info("%s finishing", __file__)
