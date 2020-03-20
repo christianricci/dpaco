@@ -49,18 +49,7 @@ class DnsParentControl(object):
     def close(self):
         self.conn.close()
 
-    def dns_decider(self, pkt):
-        packet = IP(pkt.get_payload())
-        src = packet.src
-        dst = packet.dst
-        srcport = packet.payload.sport
-        dstport = packet.payload.dport
-        hw = pkt.get_hw()
-        haddr = ''
-        if hw and type(hw[0]) != int:
-            haddr = ":".join("{:02x}".format(ord(c)) for c in hw[0:6])
-
-        dns_answer = packet
+    def dns_analyzer(self, dns_answer):
         full_dns_list = ''
         if dns_answer and DNS in dns_answer:
             for x in range(dns_answer[DNS].ancount):
@@ -79,18 +68,31 @@ class DnsParentControl(object):
                 self.add_row(values, self.dns_table_name)
                 logging.info("# DNS: %s", values)
                 values = "'{src}','{srcport}','{dst}','{dstport}','{haddr}'"\
-                    .format(src=src,
-                            srcport=srcport,
-                            dst=dst,
-                            dstport=dstport,
-                            haddr=haddr)
+                    .format(src=self.src,
+                            srcport=self.srcport,
+                            dst=self.dst,
+                            dstport=self.dstport,
+                            haddr=self.haddr)
                 self.add_row(values, self.log_table_name)
                 logging.info("# LOG: %s", values)
+
+    def packet_decider(self, pkt):
+        packet = IP(pkt.get_payload())
+        self.src = packet.src
+        self.dst = packet.dst
+        self.srcport = packet.payload.sport
+        self.dstport = packet.payload.dport
+        hw = pkt.get_hw()
+        self.haddr = ''
+        if hw and type(hw[0]) != int:
+            haddr = ":".join("{:02x}".format(ord(c)) for c in hw[0:6])
+
+        self.dns_analyzer(packet)
         pkt.accept()
 
     def run(self):
         nfqueue = NetfilterQueue()
-        nfqueue.bind(0, self.dns_decider)
+        nfqueue.bind(0, self.packet_decider)
         try:
             nfqueue.run()
         except KeyboardInterrupt:
