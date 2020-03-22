@@ -2,28 +2,28 @@ from netfilterqueue import NetfilterQueue
 from scapy.all import *
 import sqlite3
 import re
-# https://realpython.com/intro-to-python-threading/
 import logging
-import threading
 import time
+import json
 
 # Get all the DNS Answers coming from surce port 53
-# iptables - A INPUT -p udp -sport 53 - j NFQUEUE - -queue-num 0 - -queue-bypass
+# iptables -A INPUT -p udp -sport 53 -j NFQUEUE --queue-num 0 --queue-bypass
 # Get all sport 80, 443 requests reponding to browser request 
-# iptables -A INPUT -p tcp -m multiport -sports 80, 443 -j NFQUEUE -queue-num 0 -queue-bypass
+# iptables -A OUTPUT -p tcp -m multiport -dports 80, 443 -j NFQUEUE -queue-num 0 -queue-bypass
 
 class DnsParentControl(object):
     sqlite_file = '/tmp/pcontrol.sqlite'
     dns_table_name = 'dns_query_tab'
-    log_table_name = 'log_tab'
-    blacklist_table_name = 'blacklist_tab'
+    access_level_table_name = 'access_level_tab'
 
-    def __init__(self):
+    def __init__(self, log_level = 'INFO'):
+        self.log_level = log_level
+        self.default_access_level = 0
         self.conn, self.cursor = self.connect()
         self.dns_cache = {}
-        self.blacklist_cache = {}
-        self.runtime_cache = {}
+        self.access_level_cache = {}
         self.load_cache()
+        self.runtime_cache = {}
 
     def connect(self):
         conn = sqlite3.connect(self.sqlite_file)
@@ -33,27 +33,22 @@ class DnsParentControl(object):
                     dns_query_name text, \
                     dns_query_ip text, \
                     full_dns_alias_tree text, \
+                    level int default 4, \
                     PRIMARY KEY(dns_query_name, dns_query_ip))'
                   .format(tn=self.dns_table_name))
-        # c.execute('DROP TABLE IF EXISTS {tn}'.format(tn=self.log_table_name))
         c.execute('CREATE TABLE IF NOT EXISTS {tn} ( \
-                    src text, \
-                    srcport text, \
-                    dst text, \
-                    dstport text, \
-                    haddr text)'
-                  .format(tn=self.log_table_name))
-        c.execute('CREATE TABLE IF NOT EXISTS {tn} ( \
-                    name text, \
-                    haddr text, \
-                    mode text)'
-                  .format(tn=self.blacklist_table_name))
+                    description text, \
+                    ip_address text, \
+                    mac_address text, \
+                    level int default 0)'
+                  .format(tn=self.access_level_table_name))
         return conn, c
 
     def add_row(self, values, table_name):
         try:
-            self.cursor.execute('INSERT INTO {tn} values ({values})'
-                                .format(tn=table_name, values=values))
+            self.cursor.execute('INSERT INTO {tn} \
+                (dns_query_name, dns_query_ip, full_dns_alias_tree) values ({values})'
+                .format(tn=table_name, values=values))
         except sqlite3.IntegrityError:
             pass
         self.conn.commit()
@@ -63,22 +58,22 @@ class DnsParentControl(object):
 
     def load_cache(self):
         # load dns cache
-        self.cursor.execute('SELECT dns_query_ip, dns_query_name FROM {tn}'
+        self.cursor.execute('SELECT dns_query_ip, dns_query_name, level FROM {tn}'
                             .format(tn=self.dns_table_name))
         rows = self.cursor.fetchall()
         for row in rows:
-            self.dns_cache[row[0]] = row[1]
-        # load blacklist cache
-        self.cursor.execute('SELECT haddr, name||":"||mode FROM {tn}'
-                            .format(tn=self.blacklist_table_name))
+            self.dns_cache[row[0]] = json.loads('{"dns_query_name": "' + row[1] + '","level": ' + str(row[2]) + '}')
+        # load access_level cache
+        self.cursor.execute('SELECT ip_address, description, mac_address, level FROM {tn}'
+                            .format(tn=self.access_level_table_name))
         rows = self.cursor.fetchall()
-        self.blacklist_cache['ALL_HOSTS'] = 'ALLOW-ALL-WEBSITES'
-        self.blacklist_cache['UNKNOWN_HOST'] = 'ALLOW-ALL-WEBSITES'
         for row in rows:
-            self.blacklist_cache[row[0]] = row[1]
+            self.access_level_cache[row[0]] = json.loads('{"desc": "' + row[1] +
+                                                           '", "mac_address": "' + row[2] +
+                                                           '", "level": ' + str(row[3]) + '}')
 
-    def add_dns_cache(self, ip, fqdn):
-        self.dns_cache[ip] = fqdn
+    def add_dns_cache(self, ip, row):
+        self.dns_cache[ip] = json.loads(row)
 
     def dns_analyzer(self, dns_answer, raw_pkt):
         raw_pkt.accept()
@@ -98,21 +93,16 @@ class DnsParentControl(object):
                     .format(dns_query_name=full_dns_list.split(':')[0],
                             dns_query_ip=ip,
                             full_dns_alias_tree=full_dns_list)
-                self.add_dns_cache(ip, full_dns_list.split(':')[0])
+                self.add_dns_cache(ip, 
+                    '{"dns_query_name": "' + full_dns_list.split(':')[0] + '","level": ' + str(self.default_access_level) +'}')
                 self.add_row(values, self.dns_table_name)
-                logging.info("# DNS: %s", values)
-                values = "'{src}','{srcport}','{dst}','{dstport}','{haddr}'"\
-                    .format(src=self.src,
-                            srcport=self.srcport,
-                            dst=self.dst,
-                            dstport=self.dstport,
-                            haddr=self.haddr)
-                self.add_row(values, self.log_table_name)
-                logging.info("# DNS LOG: %s", values)
+                logging.info("# DNS LOG: fqdn=%s requested by %s",
+                    full_dns_list.split(':')[0],
+                    self.dst)
 
     def web_analyzer(self, web_request, raw_pkt):
         # Process existing action in runtime_cache
-        runtime_key = str(self.src + ':' + self.srcport + '<->' + self.haddr)
+        runtime_key = str(self.src + '<->' + self.dst + ':' + self.dstport)
         if runtime_key in self.runtime_cache.keys():
             if self.runtime_cache[runtime_key] == 'accept':
                 raw_pkt.accept()
@@ -125,40 +115,49 @@ class DnsParentControl(object):
                 return
 
         # Analize packet, decide and populate runtime_cache
-        # mode:
-        #   ALLOW-ALL-WEBSITES - accept all websites
+        # level:
+        #   ALLOW-ALL-WEBSITES - accept packet to all websites
+        #   DROP-ALL-WEBSITES - drop packet from any websites
+        #   ACCESS-LEVEL-0 - accept websites with access level 0 only = School related websites
+        #   ACCESS-LEVEL-1 - accept websites with access level 1 only = Popular Content (video, music, etc)
+        #   ACCESS-LEVEL-2 - accept websites with access level 2 only = Social Media (facebook, instagram, tiktok, etc)
         #
-        action_key = self.blacklist_cache.get(self.haddr)
-        if action_key == 'ALLOW-ALL-WEBSITES':
-            raw_pkt.accept()
-            self.runtime_cache[runtime_key] = 'accept'
-            logging.info("# WEB LOG: %s = %s", runtime_key, action_key)
-            return 
-        if action_key == 'DROP-ALL-WEBSITES':
-            raw_pkt.drop()
-            self.runtime_cache[runtime_key] = 'drop'
-            logging.info("# WEB LOG: %s = %s", runtime_key, action_key)
-            return
-        else:
-            raw_pkt.drop()
-            self.runtime_cache[runtime_key] = 'accept'
-            logging.info("# WEB LOG: %s = %s", runtime_key, 'ALLOW-ALL-WEBSITES')
-                
+        access_level_key = self.access_level_cache.get(self.src)
+        dns = self.dns_cache.get(self.dst)
+        if access_level_key:
+            desc_key = access_level_key.get('desc')
+            if access_level_key.get('level') >= dns.get('level'):
+                raw_pkt.accept()
+                self.runtime_cache[runtime_key] = 'accept'
+                logging.info("# WEB LOG: accept,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", desc_key,
+                    dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
+                return 
+            else:
+                raw_pkt.drop()
+                self.runtime_cache[runtime_key] = 'drop'
+                logging.info("# WEB LOG: drop,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", desc_key,
+                    dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
+                return
+        # if host not in access_level then it is allowed
+        raw_pkt.accept()
+        self.runtime_cache[runtime_key] = 'accept'
+        logging.info("# WEB LOG: accept,(Other host) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=4>",
+            dns.get('dns_query_name'), dns.get('level'), runtime_key)
+
     def packet_decider(self, raw_pkt):
         packet = IP(raw_pkt.get_payload())
         self.src = packet.src
         self.dst = packet.dst
         self.srcport = str(packet.payload.sport)
         self.dstport = str(packet.payload.dport)
-        hw = raw_pkt.get_hw()
-        self.haddr = 'UNKNOWN_HOST'
-        if hw:
-            place = ("%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x" % struct.unpack("BBBBBBBB", raw_pkt.get_hw())).split(':')
-            self.haddr = ":".join(place[i] for i in range(len(place)-2))
 
-        if packet and DNS in packet:
+        if self.log_level == 'DEBUG':
+            logging.debug("-> DEBUG: %s:%s, %s:%s",
+                self.src, self.srcport, self.dst, self.dstport)
+
+        if packet and DNS in packet and self.srcport == '53':
             self.dns_analyzer(packet, raw_pkt)
-        if packet and TCP in packet and (packet.sport == 80 or packet.sport == 443):
+        if packet and (self.dstport == '80' or self.dstport == '443'):
             self.web_analyzer(packet, raw_pkt)
 
     def run(self):
