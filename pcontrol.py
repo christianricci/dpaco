@@ -6,11 +6,6 @@ import logging
 import time
 import json
 
-# Get all the DNS Answers coming from surce port 53
-# iptables -A INPUT -p udp -sport 53 -j NFQUEUE --queue-num 0 --queue-bypass
-# Get all sport 80, 443 requests reponding to browser request 
-# iptables -A OUTPUT -p tcp -m multiport -dports 80, 443 -j NFQUEUE -queue-num 0 -queue-bypass
-
 class DnsParentControl(object):
     sqlite_file = '/tmp/pcontrol.sqlite'
     dns_table_name = 'dns_query_tab'
