@@ -83,7 +83,7 @@ opkg install iptables-mod-nfqueue
 # Get all the DNS Answers coming from source port 53
 /usr/sbin/iptables -A output_rule -o br-lan -p udp --sport 53 -j NFQUEUE --queue-num 0 --queue-bypass
 # Get all request to dest port 80, 443
-/usr/sbin/iptables -A OUTPUT -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 0 --queue-bypass
+/usr/sbin/iptables -A forwarding_rule -i br-lan -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 0 --queue-bypass
 ```
 #### Check iptables -L -n -v input_rule ####
 ```shell
