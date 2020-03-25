@@ -5,6 +5,8 @@ import re
 import logging
 import time
 import json
+import sys
+import traceback
 
 class DnsParentControl(object):
     sqlite_file = '/tmp/pcontrol.sqlite'
@@ -71,73 +73,90 @@ class DnsParentControl(object):
         self.dns_cache[ip] = json.loads(row)
 
     def dns_analyzer(self, dns_answer, raw_pkt):
-        raw_pkt.accept()
+        try:
+            raw_pkt.accept()
 
-        full_dns_list = ''
-        for x in range(dns_answer[DNS].ancount):
-            rrname = dns_answer[DNSRR][x].rrname
-            rdata = dns_answer[DNSRR][x].rdata
-            full_dns_list += (rrname.decode('utf8') if type(rrname) == bytes else rrname) + ':' + \
-                (rdata.decode('utf8') if type(rdata) == bytes else rdata)
-            if (x + 1) < dns_answer[DNS].ancount:
-                full_dns_list += '|'
-        re_c = re.compile(r'[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*')
-        for ip in list(filter(re_c.search, [alias.split(':')[-1] for alias in full_dns_list.split('|')])):
-            if not ip in self.dns_cache.keys():
-                values = "'{dns_query_name}','{dns_query_ip}','{full_dns_alias_tree}'"\
-                    .format(dns_query_name=full_dns_list.split(':')[0],
-                            dns_query_ip=ip,
-                            full_dns_alias_tree=full_dns_list)
-                self.add_dns_cache(ip, 
-                    '{"dns_query_name": "' + full_dns_list.split(':')[0] + '","level": ' + str(self.default_access_level) +'}')
-                self.add_row(values, self.dns_table_name)
-                logging.info("# DNS LOG: fqdn=%s requested by %s",
-                    full_dns_list.split(':')[0],
-                    self.dst)
+            full_dns_list = ''
+            for x in range(dns_answer[DNS].ancount):
+                rrname = dns_answer[DNSRR][x].rrname
+                rdata = dns_answer[DNSRR][x].rdata
+                full_dns_list += (rrname.decode('utf8') if type(rrname) == bytes else rrname) + ':' + \
+                    (rdata.decode('utf8') if type(rdata) == bytes else rdata)
+                if (x + 1) < dns_answer[DNS].ancount:
+                    full_dns_list += '|'
+            re_c = re.compile(r'[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*')
+            for ip in list(filter(re_c.search, [alias.split(':')[-1] for alias in full_dns_list.split('|')])):
+                if not ip in self.dns_cache.keys():
+                    values = "'{dns_query_name}','{dns_query_ip}','{full_dns_alias_tree}'"\
+                        .format(dns_query_name=full_dns_list.split(':')[0],
+                                dns_query_ip=ip,
+                                full_dns_alias_tree=full_dns_list)
+                    self.add_dns_cache(ip, 
+                        '{"dns_query_name": "' + full_dns_list.split(':')[0] + '","level": ' + str(self.default_access_level) +'}')
+                    self.add_row(values, self.dns_table_name)
+                    logging.info("# DNS LOG: fqdn=%s requested by %s",
+                        full_dns_list.split(':')[0],
+                        self.dst)
+        except BaseException as e:
+            logging.error("[Error] DNS LOG: <src=%s>, <dst=%s> <rrname=%s> <rdata=%s> message: %s",
+                self.src, self.dst, rrname, rdata, str(e))
+            traceback.print_exc()
 
     def web_analyzer(self, web_request, raw_pkt):
-        # Process existing action in runtime_cache
-        runtime_key = str(self.src + '<->' + self.dst + ':' + self.dstport)
-        if runtime_key in self.runtime_cache.keys():
-            if self.runtime_cache[runtime_key] == 'accept':
-                raw_pkt.accept()
-                return
-            elif self.runtime_cache[runtime_key] == 'drop':
-                raw_pkt.drop()
-                return
-            else:
-                raw_pkt.drop()
-                return
+        try:
+            # Process existing action in runtime_cache
+            runtime_key = str(self.src + '<->' + self.dst + ':' + self.dstport)
+            if runtime_key in self.runtime_cache.keys():
+                if self.runtime_cache[runtime_key] == 'accept':
+                    raw_pkt.accept()
+                    return
+                elif self.runtime_cache[runtime_key] == 'drop':
+                    raw_pkt.drop()
+                    return
+                else:
+                    raw_pkt.drop()
+                    return
 
-        # Analize packet, decide and populate runtime_cache
-        # level:
-        #   ALLOW-ALL-WEBSITES - accept packet to all websites
-        #   DROP-ALL-WEBSITES - drop packet from any websites
-        #   ACCESS-LEVEL-0 - accept websites with access level 0 only = School related websites
-        #   ACCESS-LEVEL-1 - accept websites with access level 1 only = Popular Content (video, music, etc)
-        #   ACCESS-LEVEL-2 - accept websites with access level 2 only = Social Media (facebook, instagram, tiktok, etc)
-        #
-        access_level_key = self.access_level_cache.get(self.src)
-        dns = self.dns_cache.get(self.dst)
-        if access_level_key:
-            desc_key = access_level_key.get('desc')
-            if access_level_key.get('level') >= dns.get('level'):
-                raw_pkt.accept()
-                self.runtime_cache[runtime_key] = 'accept'
-                logging.info("# WEB LOG: accept,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", desc_key,
-                    dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
-                return 
-            else:
-                raw_pkt.drop()
-                self.runtime_cache[runtime_key] = 'drop'
-                logging.info("# WEB LOG: drop,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", desc_key,
-                    dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
-                return
-        # if host not in access_level then it is allowed
-        raw_pkt.accept()
-        self.runtime_cache[runtime_key] = 'accept'
-        logging.info("# WEB LOG: accept,(Other host) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=4>",
-            dns.get('dns_query_name'), dns.get('level'), runtime_key)
+            # Analize packet, decide and populate runtime_cache
+            # level:
+            #   ALLOW-ALL-WEBSITES - accept packet to all websites
+            #   DROP-ALL-WEBSITES - drop packet from any websites
+            #   ACCESS-LEVEL-0 - accept websites with access level 0 only = School related websites
+            #   ACCESS-LEVEL-1 - accept websites with access level 1 only = Popular Content (video, music, etc)
+            #   ACCESS-LEVEL-2 - accept websites with access level 2 only = Social Media (facebook, instagram, tiktok, etc)
+            #
+            access_level_key = self.access_level_cache.get(self.src)
+            dns = self.dns_cache.get(self.dst)
+            if not dns:
+                values = "'unknown_dns_name','self.dst','unknown_dns_name'"
+                self.add_dns_cache(self.dst ,'{"dns_query_name": "unknown_dns_name","level": ' + str(self.default_access_level) +'}')
+                self.add_row(values, self.dns_table_name)                                                                      
+                logging.info("# DNS LOG: fqdn=%s requested by %s", 'unknown_dns_name', self.dst)
+                dns = self.dns_cache.get(self.dst)
+		
+            if access_level_key:
+                desc_key = access_level_key.get('desc')
+                if access_level_key.get('level') >= dns.get('level'):
+                    raw_pkt.accept()
+                    self.runtime_cache[runtime_key] = 'accept'
+                    logging.info("# WEB LOG: accept,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", desc_key,
+                        dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
+                    return 
+                else:
+                    raw_pkt.drop()
+                    self.runtime_cache[runtime_key] = 'drop'
+                    logging.info("# WEB LOG: drop,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", desc_key,
+                        dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
+                    return
+            # if host not in access_level then it is allowed
+            raw_pkt.accept()
+            self.runtime_cache[runtime_key] = 'accept'
+            logging.info("# WEB LOG: accept,(Other host) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=4>",
+                dns.get('dns_query_name'), dns.get('level'), runtime_key)
+        except BaseException as e:
+            logging.error("[Error] WEB LOG: <runtime_key=%s>, <access_level_key=%s> <dns=%s> message: %s",
+                runtime_key, access_level_key, dns, str(e))
+            traceback.print_exc()
 
     def packet_decider(self, raw_pkt):
         packet = IP(raw_pkt.get_payload())
