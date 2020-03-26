@@ -75,12 +75,12 @@ class AcessLevelListResource(Resource):
         return access_level_schema.dump(new_level)
 
 class AccessLevelResource(Resource):
-    def get(self, level_id):
-        level = AccessLevel.query.get_or_404(level_id)
+    def get(self, id):
+        level = AccessLevel.query.get_or_404(id)
         return access_level_schema.dump(level)
 
-    def patch(self, level_id):
-        level = AccessLevel.query.get_or_404(level_id)
+    def patch(self, id):
+        level = AccessLevel.query.get_or_404(id)
 
         if 'owner' in request.json:
             level.owner = request.json['owner']
@@ -120,10 +120,10 @@ class DnsQueryListResource(Resource):
 # Routes
 
 DnsParentControlApi.api.add_resource(AcessLevelListResource, '/devices')
-DnsParentControlApi.api.add_resource(AccessLevelResource, '/devices/<int:host_id>')
+DnsParentControlApi.api.add_resource(AccessLevelResource, '/devices/<int:id>')
 DnsParentControlApi.api.add_resource(DnsQueryListResource, '/dns-names')
 
 # main
 
 if __name__ == '__main__':
-    DnsParentControlApi.app.run(host='0.0.0.0',debug=True)
+    DnsParentControlApi.app.run(host='127.0.0.1',debug=True)
