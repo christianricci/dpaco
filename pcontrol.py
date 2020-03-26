@@ -7,70 +7,49 @@ import time
 import json
 import sys
 import traceback
+import requests
 
 class DnsParentControl(object):
-    sqlite_file = '/tmp/pcontrol.sqlite'
-    dns_table_name = 'dns_query_tab'
-    access_level_table_name = 'access_level_tab'
-
     def __init__(self, log_level = 'INFO'):
+        self.api_uri = '127.0.0.1:5000'
         self.log_level = log_level
-        self.default_access_level = 0
-        self.conn, self.cursor = self.connect()
+        self.default_access_level = 2
         self.dns_cache = {}
         self.access_level_cache = {}
         self.load_cache()
         self.runtime_cache = {}
 
-    def connect(self):
-        conn = sqlite3.connect(self.sqlite_file)
-        c = conn.cursor()
-        # c.execute('DROP TABLE IF EXISTS {tn}'.format(tn=self.dns_table_name))
-        c.execute('CREATE TABLE IF NOT EXISTS {tn} ( \
-                    dns_query_name text, \
-                    dns_query_ip text, \
-                    full_dns_alias_tree text, \
-                    level int default 4, \
-                    PRIMARY KEY(dns_query_name, dns_query_ip))'
-                  .format(tn=self.dns_table_name))
-        c.execute('CREATE TABLE IF NOT EXISTS {tn} ( \
-                    description text, \
-                    ip_address text, \
-                    mac_address text, \
-                    level int default 0)'
-                  .format(tn=self.access_level_table_name))
-        return conn, c
-
-    def add_row(self, values, table_name):
-        try:
-            self.cursor.execute('INSERT INTO {tn} \
-                (dns_query_name, dns_query_ip, full_dns_alias_tree) values ({values})'
-                .format(tn=table_name, values=values))
-        except sqlite3.IntegrityError:
-            pass
-        self.conn.commit()
-
-    def close(self):
-        self.conn.close()
-
     def load_cache(self):
         # load dns cache
-        self.cursor.execute('SELECT dns_query_ip, dns_query_name, level FROM {tn}'
-                            .format(tn=self.dns_table_name))
-        rows = self.cursor.fetchall()
-        for row in rows:
-            self.dns_cache[row[0]] = json.loads('{"dns_query_name": "' + row[1] + '","level": ' + str(row[2]) + '}')
+        dns_names = self.api_request(request_type='get', namespace='dns-names')
+        if dns_names:
+            for row in dns_names:
+                ip_address = row['dns_query_ip']
+                del row['dns_query_ip']            
+                self.dns_cache[ip_address] = row
         # load access_level cache
-        self.cursor.execute('SELECT ip_address, description, mac_address, level FROM {tn}'
-                            .format(tn=self.access_level_table_name))
-        rows = self.cursor.fetchall()
-        for row in rows:
-            self.access_level_cache[row[0]] = json.loads('{"desc": "' + row[1] +
-                                                           '", "mac_address": "' + row[2] +
-                                                           '", "level": ' + str(row[3]) + '}')
+        levels = self.api_request(request_type='get', namespace='devices')
+        if levels:
+            for row in levels:
+                ip_address = row['ip_address']
+                del row['ip_address']
+                self.access_level_cache[ip_address] = row
 
     def add_dns_cache(self, ip, row):
-        self.dns_cache[ip] = json.loads(row)
+        self.dns_cache[ip] = row
+
+    def api_request(self, **kwargs):
+        request_type = kwargs.get('request_type')
+        body = kwargs.get('body')
+        namespace = kwargs.get('namespace')
+        url = "http://" + self.api_uri + "/" + namespace
+        headers = {'Content-type': 'application/json', 'Accept': 'text/plain'}
+
+        if request_type == 'post':
+            r = requests.post(url, data=body, headers=headers)
+        else:
+            r = requests.get(url, headers=headers)
+        return r.json()
 
     def dns_analyzer(self, dns_answer, raw_pkt):
         try:
@@ -87,16 +66,15 @@ class DnsParentControl(object):
             re_c = re.compile(r'[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*')
             for ip in list(filter(re_c.search, [alias.split(':')[-1] for alias in full_dns_list.split('|')])):
                 if not ip in self.dns_cache.keys():
-                    values = "'{dns_query_name}','{dns_query_ip}','{full_dns_alias_tree}'"\
+                    values = '{{"dns_query_name": "{dns_query_name}","dns_query_ip": "{dns_query_ip}","full_dns_alias_tree": "{full_dns_alias_tree}","level": {level}}}'\
                         .format(dns_query_name=full_dns_list.split(':')[0],
                                 dns_query_ip=ip,
-                                full_dns_alias_tree=full_dns_list)
-                    self.add_dns_cache(ip, 
-                        '{"dns_query_name": "' + full_dns_list.split(':')[0] + '","level": ' + str(self.default_access_level) +'}')
-                    self.add_row(values, self.dns_table_name)
-                    logging.info("# DNS LOG: fqdn=%s requested by %s",
-                        full_dns_list.split(':')[0],
-                        self.dst)
+                                full_dns_alias_tree=full_dns_list,
+                                level=self.default_access_level)
+                    dns_name = self.api_request(request_type='post', body=values, namespace='dns-names')
+                    del dns_name['dns_query_ip']
+                    self.add_dns_cache(ip, dns_name)
+                    logging.info("# DNS LOG: fqdn=%s requested by %s", dns_name['dns_query_name'], self.dst)
         except BaseException as e:
             logging.error("[Error] DNS LOG: <src=%s>, <dst=%s> <rrname=%s> <rdata=%s> message: %s",
                 self.src, self.dst, rrname, rdata, str(e))
@@ -128,25 +106,30 @@ class DnsParentControl(object):
             access_level_key = self.access_level_cache.get(self.src)
             dns = self.dns_cache.get(self.dst)
             if not dns:
-                values = "'unknown_dns_name','self.dst','unknown_dns_name'"
-                self.add_dns_cache(self.dst ,'{"dns_query_name": "unknown_dns_name","level": ' + str(self.default_access_level) +'}')
-                self.add_row(values, self.dns_table_name)                                                                      
+                values = '{{"dns_query_name": "{dns_query_name}","dns_query_ip": "{dns_query_ip}","full_dns_alias_tree": "{full_dns_alias_tree}","level": {level}}}'\
+                    .format(dns_query_name='unknown_dns_name',
+                            dns_query_ip=self.dst,
+                            full_dns_alias_tree='unknown_dns_name',
+                            level=self.default_access_level)                
+                dns_name = self.api_request(request_type='post', body=values, namespace='dns-names')
+                del dns_name['dns_query_ip']
+                self.add_dns_cache(self.dst ,dns_name)
                 logging.info("# DNS LOG: fqdn=%s requested by %s", 'unknown_dns_name', self.dst)
                 dns = self.dns_cache.get(self.dst)
 		
             if access_level_key:
-                desc_key = access_level_key.get('desc')
+                desc_key = access_level_key.get('owner') + " - " + access_level_key.get('device')
                 if access_level_key.get('level') >= dns.get('level'):
                     raw_pkt.accept()
                     self.runtime_cache[runtime_key] = 'accept'
-                    logging.info("# WEB LOG: accept,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", desc_key,
-                        dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
+                    logging.info("# WEB LOG: accept,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", 
+                        desc_key, dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
                     return 
                 else:
                     raw_pkt.drop()
                     self.runtime_cache[runtime_key] = 'drop'
-                    logging.info("# WEB LOG: drop,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", desc_key,
-                        dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
+                    logging.info("# WEB LOG: drop,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", 
+                        desc_key, dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
                     return
             # if host not in access_level then it is allowed
             raw_pkt.accept()
@@ -188,7 +171,6 @@ if __name__ == "__main__":
     format = "%(asctime)s: %(message)s"
     logging.basicConfig(format=format, level=logging.INFO,
                         datefmt="%H:%M:%S")
-
     logging.info("%s starting", __file__)
     dpc = DnsParentControl()
     dpc.run()

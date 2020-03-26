@@ -15,6 +15,11 @@ pyinstaller pcontrol.py
 
 ## Required rules (TESTING) ## 
 ```shell
+sudo apt install dnsmasq
+vi /etc/dnsmasq.conf # servers=192.168.1.1
+sudo systemctl enable dnsmasq.service
+vi /etc/resolv.conf # nameserver 127.0.0.1
+
 iptables -N LOGGING
 iptables -F LOGGING -v
 iptables -F OUTPUT -v
@@ -24,9 +29,9 @@ iptables -P OUTPUT ACCEPT
 iptables -P INPUT ACCEPT
 iptables -P FORWARD ACCEPT
 # Get all the DNS Answers coming from source port 53
-/usr/sbin/iptables -A output_rule -o br-lan -p udp --sport 53 -j NFQUEUE --queue-num 0 --queue-bypass
+iptables -A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 0 --queue-bypass
 # Get all request to dest port 80, 443
-/usr/sbin/iptables -A OUTPUT -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 0 --queue-bypass
+iptables -A OUTPUT -p tcp -m multiport --dports 80,443 -j NFQUEUE --queue-num 0 --queue-bypass
 ```
 
 ## Required rules (PROD) ## 
@@ -94,6 +99,12 @@ Chain input_rule (1 references)
 #### run ####
 ```shell 
 cd /root/dpaco; python3 pcontrol.py
+```
+
+### Debug with VSCODE ####
+Use "Python: Remote Attach" in your launch.json, adjust port and host as required.
+```shell
+sudo python3 -m ptvsd --host lenovo.lan  --port 5678 --wait pcontrol.py
 ```
 
 ## TODO ## 
