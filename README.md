@@ -129,4 +129,9 @@ sudo python3 -m ptvsd --host lenovo.lan  --port 5678 --wait pcontrol.py
 * Rest API to reset the cache
 * Rest API to add/remove/update access_control
 
+## References and Thanks ##
+* https://github.com/rahmanfadhil/flask-rest-api/blob/master/main.py
+* https://codesource.io/building-a-crud-application-with-svelte/
+* https://medium.com/@cabreraalex/svelte-js-flask-combining-svelte-with-a-simple-backend-server-d1bc46190ab9
+
 Markdown rules in https://github.com/tchapi/markdown-cheatsheet/blob/master/README.md

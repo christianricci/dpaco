@@ -44,7 +44,7 @@
 		console.log(devices);
 	};
 	let isEdit = false;
-	let editNote = device => {
+	let editDevice = device => {
 		isEdit = true;
 		data = device;
 	};
@@ -61,6 +61,13 @@
 		let objIndex = devices.findIndex(obj => obj.id == deviceDB.id);
 		console.log("Before update: ", devices[objIndex]);
 		devices[objIndex] = deviceDB;
+		fetch("/devices/" +  deviceDB.id,
+			{
+				method: 'PATCH',
+				body:    JSON.stringify(deviceDB),
+				headers: { 'Content-Type': 'application/json' }
+			}
+		);
 		data = {
 			id: null,
 			owner: "",
@@ -178,7 +185,8 @@
 								<p class="card-text">{device.ip_address}</p>
 								<p class="card-text">{device.mac_address}</p>
 								<p class="card-text">{device.level}</p>
-								<button class="btn btn-info" on:click={editNote(device)}>
+								<p class="card-text">{device.level}</p>
+								<button class="btn btn-info" on:click={editDevice(device)}>
 									Edit
 								</button>
 								<button class="btn btn-danger" on:click={deleteDevice(device.id)}>
