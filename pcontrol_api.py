@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from flask_restful import Api, Resource
@@ -119,11 +119,23 @@ class DnsQueryListResource(Resource):
 
 # Routes
 
+# Got it from 
+#   https://github.com/cabreraalex/svelte-flask-example/blob/master/server.py
+#   https://medium.com/@cabreraalex/svelte-js-flask-combining-svelte-with-a-simple-backend-server-d1bc46190ab9
+# Path for our main Svelte page
+@DnsParentControlApi.app.route("/")
+def base():
+    return send_from_directory('client/public', 'index.html')
+
+# Path for all the static files (compiled JS/CSS, etc.)
+@DnsParentControlApi.app.route("/<path:path>")
+def home(path):
+    return send_from_directory('client/public', path)
+
 DnsParentControlApi.api.add_resource(AcessLevelListResource, '/devices')
 DnsParentControlApi.api.add_resource(AccessLevelResource, '/devices/<int:id>')
 DnsParentControlApi.api.add_resource(DnsQueryListResource, '/dns-names')
 
 # main
-
 if __name__ == '__main__':
-    DnsParentControlApi.app.run(host='127.0.0.1',debug=True)
+    DnsParentControlApi.app.run(host='0.0.0.0',debug=True)

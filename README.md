@@ -96,9 +96,25 @@ Chain input_rule (1 references)
  pkts bytes target     prot opt in     out     source               destination
     1   318 NFQUEUE    udp  --  *      *       0.0.0.0/0            0.0.0.0/0            udp spt:53 NFQUEUE num 0 bypass
 ```
+### Setup Svelte ###
+```shell
+curl -sL https://deb.nodesource.com/setup_13.x | sudo bash -
+sudo apt-get install -y nodejs
+node --version
+npm -v
+
+cd dpaco
+npx degit sveltejs/template client
+cd client
+npm install
+```
+
 #### run ####
 ```shell 
-cd /root/dpaco; python3 pcontrol.py
+# NFQueue server
+cd /root/dpaco; python3 run.py
+# API Server
+python3 pcontrol_api.py
 ```
 
 ### Debug with VSCODE ####
