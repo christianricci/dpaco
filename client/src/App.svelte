@@ -15,71 +15,18 @@
 		});
 		devices = await res.json();
 	});
-	let data = {
-		id: null,
-		owner: "",
-		device: "",
-		ip_address: "",
-		mac_adess: "",
-		level: 4
-	};
-	let addDevice = () => {
-		const newDevice = {
-			id: devices.length + 1,
-			owner: data.owner,
-			device: data.device,
-			ip_address: data.ip_address,
-			mac_address: data.mac_address,
-			level: data.level
-		};
-		devices = devices.concat(newDevice);
-		data = {
-			id: null,
-			owner: "",
-			device: "",
-			ip_address: "",
-			mac_adess: "",
-			level: 4
-		};
-		console.log(devices);
-	};
-	let isEdit = false;
-	let editDevice = device => {
-		isEdit = true;
-		data = device;
-	};
-	let updateDevice = () => {
-		isEdit = !isEdit;
-		let deviceDB = {
-			id: data.id,
-			owner: data.owner,
-			device: data.device,
-			ip_address: data.ip_address,
-			mac_address: data.mac_address,
-			level: data.level
-		};
-		let objIndex = devices.findIndex(obj => obj.id == deviceDB.id);
-		console.log("Before update: ", devices[objIndex]);
-		devices[objIndex] = deviceDB;
-		fetch("/devices/" +  deviceDB.id,
+	let updateDevice = (device, level) => {
+		device.level = level
+		fetch("/devices/" +  device.id,
 			{
 				method: 'PATCH',
-				body:    JSON.stringify(deviceDB),
+				body:    JSON.stringify(device),
 				headers: { 'Content-Type': 'application/json' }
 			}
 		);
-		data = {
-			id: null,
-			owner: "",
-			device: "",
-			ip_address: "",
-			mac_address: "",
-			level: ""
-		};
-	};
-	let deleteDevice = id => {
-		console.log(id);
-		devices = devices.filter(device => device.id !== id);
+		let objIndex = devices.findIndex(obj => obj.id == device.id);
+		console.log("Before update: ", devices[objIndex]);
+		devices[objIndex] = device;
 	};
 </script>
 <style>
@@ -90,115 +37,57 @@
   .loading {
     opacity: 0;
     animation: 0.4s 0.8s forwards fade-in;
-  }
-  @keyframes fade-in {
-    from { opacity: 0; }
-    to { opacity: 1; }
-  }
-  li {
-    list-style-type: georgian;
-  }	
+	}
+	.card-header .badge { 
+		position: absolute;
+  	right: 6px;   /* must be equal to parent's right padding */
+	}
+	.btn, .btn-xs {
+		padding: .25rem .4rem;
+		font-size: .875rem;
+		line-height: .5;
+		border-radius: .2rem;
+	}
 </style>
 <section>
 	<div class="container">
 		<div class="row mt-5 ">
-			<div class="col-md-6">
-				<div class="card p-2 shadow">
-					<div class="card-body">
-						<h5 class="card-title mb-4">Add New Device</h5>
-						<form>
-							<div class="form-group">
-								<label for="title">Owner</label>
-								<input
-									bind:value={data.owner}
-									type="text"
-									class="form-control"
-									id="text"
-									placeholder="device Owner" />
-							</div>
-							<div class="form-group">
-								<label for="category">Device</label>
-								<select
-									class="form-control"
-									id="device"
-									bind:value={data.device}>
-									<option selected disabled>Select a Device</option>
-									<option value="Mobile">Mobile</option>
-									<option value="Laptop">Laptop</option>
-									<option value="Desktop">Desktop</option>
-									<option value="IP-Camera">IP-Camera</option>
-								</select>
-							</div>
-							<div class="form-group">
-								<label for="content">IP Address</label>
-								<input
-									bind:value={data.ip_address}
-									type="text"
-									class="form-control"
-									id="text"
-									placeholder="IP Address" />
-							</div>
-							<div class="form-group">
-								<label for="content">MAC Address</label>
-								<input
-									bind:value={data.mac_adess}
-									type="text"
-									class="form-control"
-									id="text"
-									placeholder="MAC Address" />
-							</div>
-							<div class="form-group">
-								<label for="content">Access Level</label>
-								<input
-									bind:value={data.level}
-									type="text"
-									class="form-control"
-									id="text"
-									placeholder="Access Level" />
-							</div>
-							{#if isEdit === false}
-								<button
-									type="submit"
-									on:click|preventDefault={addDevice}
-									class="btn btn-primary">
-									Add Device
-								</button>
-							{:else}
-								<button
-									type="submit"
-									on:click|preventDefault={updateDevice}
-									class="btn btn-info">
-									Edit Device
-								</button>
-							{/if}
-						</form>
-					</div>
-				</div>
-			</div>
-			<div class="col-md-6">
-				{#if devices}
-					{#each devices as device}
+			{#if devices}
+				{#each devices as device}
+					<div class="col-md-4">
 						<div class="card mb-3">
-							<div class="card-header">{device.device}</div>
+							<div class="card-header">{device.owner}
+								{#if device.level == -1}
+									<span class="badge badge-pill badge-success">No Access</span>
+								{:else if device.level == 0}
+									<span class="badge badge-pill badge-info">Level 0</span>
+								{:else if device.level == 1}
+									<span class="badge badge-pill badge-warning">Level 1</span>
+								{:else}
+									<span class="badge badge-pill badge-danger">Level 2</span>
+								{/if}
+							</div>
 							<div class="card-body">
-								<h5 class="card-title">{device.owner}</h5>
-								<p class="card-text">{device.ip_address}</p>
-								<p class="card-text">{device.mac_address}</p>
-								<p class="card-text">{device.level}</p>
-								<p class="card-text">{device.level}</p>
-								<button class="btn btn-info" on:click={editDevice(device)}>
-									Edit
+								<h6 class="card-title">{device.device}</h6>
+								<button type="submit" class="btn btn-success btn-xs" on:click|preventDefault={updateDevice(device, -1)}>
+									No Access
 								</button>
-								<button class="btn btn-danger" on:click={deleteDevice(device.id)}>
-									Delete
+								<button type="submit" class="btn btn-info btn-xs" on:click|preventDefault={updateDevice(device, 0)}>
+									Level 0
+								</button>
+								<button type="submit" class="btn btn-warning btn-xs" on:click|preventDefault={updateDevice(device, 1)}>
+									Level 1
+								</button>
+								<button type="submit" class="btn btn-danger btn-xs" on:click|preventDefault={updateDevice(device, 2)}>
+									Level 2
 								</button>
 							</div>
 						</div>
-					{/each}
-				{:else}
-					<p class="loading">loading...</p>
-				{/if}
-			</div>
+					</div>
+				{/each}
+			{:else}
+				<p class="loading">loading...</p>
+			{/if}
 		</div>
 	</div>
 </section>
