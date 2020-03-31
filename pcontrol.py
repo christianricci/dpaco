@@ -16,24 +16,41 @@ class DnsParentControl(object):
         self.default_access_level = 2
         self.dns_cache = {}
         self.access_level_cache = {}
-        self.load_cache()
         self.runtime_cache = {}
+        self.load_cache('dns_cache')
+        self.load_cache('access_level_cache')
 
-    def load_cache(self):
-        # load dns cache
-        dns_names = self.api_request(request_type='get', namespace='dns-names')
-        if dns_names:
-            for row in dns_names:
-                ip_address = row['dns_query_ip']
-                del row['dns_query_ip']            
-                self.dns_cache[ip_address] = row
-        # load access_level cache
-        levels = self.api_request(request_type='get', namespace='devices')
-        if levels:
-            for row in levels:
-                ip_address = row['ip_address']
-                del row['ip_address']
-                self.access_level_cache[ip_address] = row
+    def load_cache(self, cache_name):
+        if cache_name == 'dns_cahe':
+            # load dns cache
+            dns_names = self.api_request(request_type='get', namespace='dns-names')
+            if dns_names:
+                for row in dns_names:
+                    ip_address = row['dns_query_ip']
+                    del row['dns_query_ip']            
+                    self.dns_cache[ip_address] = row
+        if cache_name == 'access_level_cache':
+            # load access_level cache
+            levels = self.api_request(request_type='get', namespace='devices')
+            if levels:
+                for row in levels:
+                    ip_address = row['ip_address']
+                    del row['ip_address']
+                    self.access_level_cache[ip_address] = row
+
+    def clean_cache(self, cache_name):
+        try:
+            if cache_name == 'access_level_cache':
+                self.access_level_cache.clear()
+                self.load_cache('access_level_cache')
+            if cache_name == 'dns_cache':
+                self.dns_cache.clear()
+                self.load_cache('dns_cache')
+            if cache_name == 'runtime_cache':
+                self.runtime_cache.clear()
+        except BaseException as e:
+            logging.error("[Error] CACHE: <cache_name=%s>", cache_name)
+            traceback.print_exc()
 
     def add_dns_cache(self, ip, row):
         self.dns_cache[ip] = row
