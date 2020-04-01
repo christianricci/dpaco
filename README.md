@@ -90,17 +90,24 @@ Chain input_rule (1 references)
  pkts bytes target     prot opt in     out     source               destination
     1   318 NFQUEUE    udp  --  *      *       0.0.0.0/0            0.0.0.0/0            udp spt:53 NFQUEUE num 0 bypass
 ```
-### Setup Svelte ###
+### Setup Web Client ###
 ```shell
+# On development environment
 curl -sL https://deb.nodesource.com/setup_13.x | sudo bash -
 sudo apt-get install -y nodejs
 node --version
 npm -v
+cd client
+npm run dev
 
-cd dpaco
-npx degit sveltejs/template client
+# On OpenWRT
+# cd dpaco
+# npx degit sveltejs/template client
+opkg install node
+opkg install node-npm
 cd client
 npm install
+npm run build
 ```
 
 #### Database Migration ####

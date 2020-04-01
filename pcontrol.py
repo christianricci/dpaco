@@ -188,6 +188,10 @@ class DnsParentControlFw(object):
             if msg['action'] == 'clean_access_level_cache':
                 logging.info("[FW][Info]: processing msg from [API] <action=%s>", msg['action'])
                 self.load_cache('access_level_cache')
+            elif msg['action'] == 'clean_runtime_cache':
+                logging.info("[FW][Info]: processing msg from [API] <action=%s>", msg['action'])
+                self.load_cache('access_level_cache')
+                self.runtime_cache = {}
             else:
                 logging.error("[FW][Error]: not able to match any action from msg <action=%s>", msg)
 

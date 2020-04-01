@@ -110,6 +110,8 @@ class AccessLevelResource(Resource):
             logging.info('[API][Info] access level modified <owner=%s,device=%s,level=%s>',
                 level.owner,level.device,level.level)
             DnsParentControlApi.msg_queue.put({"action": "clean_access_level_cache"})
+            DnsParentControlApi.msg_queue.put({"action": "clean_runtime_cache"})
+
         
         return access_level_schema.dump(level)
 
