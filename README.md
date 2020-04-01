@@ -7,12 +7,6 @@ pip install scapy
 pip install NetfilterQueue
 ```
 
-## Binary deployment ## 
-```shell
-pip install pyinstaller
-pyinstaller pcontrol.py
-```
-
 ## Required rules (TESTING) ## 
 ```shell
 sudo apt install dnsmasq
@@ -109,18 +103,29 @@ cd client
 npm install
 ```
 
+#### Database Migration ####
+```shell
+$ python3
+from pcontrol_api import DnsParentControlApi
+DnsParentControlApi.db.create_all()
+exit()
+```
+
 #### run ####
-```shell 
-# NFQueue server
-cd /root/dpaco; python3 run.py
-# API Server
-python3 pcontrol_api.py
+```shell
+cd /root/dpaco; 
+sudo ./run.py
+
+# access to WebClient in
+http://<host>:5000
 ```
 
 ### Debug with VSCODE ####
 Use "Python: Remote Attach" in your launch.json, adjust port and host as required.
 ```shell
 sudo python3 -m ptvsd --host lenovo.lan  --port 5678 --wait pcontrol.py
+or 
+sudo python3 server.py # use 'import pdb' and 'pdb.set_trace()'
 ```
 
 ## TODO ## 

@@ -2,6 +2,7 @@ from flask import Flask, request, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_marshmallow import Marshmallow
 from flask_restful import Api, Resource
+import logging
 
 # Thanks rahmanfadhil. This is Based on https://github.com/rahmanfadhil/flask-rest-api/blob/master/main.py
 # Migration:
@@ -10,12 +11,23 @@ from flask_restful import Api, Resource
 #   >>> DnsParentControlApi.db.create_all()
 #   >>> exit()
 
-class DnsParentControlApi:
+# Main Class
+class DnsParentControlApi(object):
     app = Flask(__name__)
     app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/pcontrol.sqlite'
     db = SQLAlchemy(app)
     ma = Marshmallow(app)
     api = Api(app)
+    msg_queue = None
+
+    def __init__(self, queue):
+        DnsParentControlApi.msg_queue = queue
+        logging.info('[API][Info] Initialize: Starting %s', self.__class__.__name__)
+
+    def run(self):
+        # Do not run in debug=True
+        # https://stackoverflow.com/questions/9449101/how-to-stop-flask-from-initialising-twice-in-debug-mode
+        DnsParentControlApi.app.run(host='0.0.0.0', port='5000', debug=False)
 
 # Database Models
 
@@ -43,7 +55,6 @@ class DnsQuery(DnsParentControlApi.db.Model):
     dns_query_ip = DnsParentControlApi.db.Column(DnsParentControlApi.db.Text)
     full_dns_alias_tree = DnsParentControlApi.db.Column(DnsParentControlApi.db.Text)
     level = DnsParentControlApi.db.Column(DnsParentControlApi.db.Integer, default=2)
-    DnsParentControlApi.db.UniqueConstraint(dns_query_name, dns_query_ip, name='uix_1')
 
     def __repr__(self):
         return '<DnsQuery %s>' % self.description
@@ -91,8 +102,15 @@ class AccessLevelResource(Resource):
         if 'mac_address' in request.json:
             level.mac_address = request.json['mac_address']
         if 'level' in request.json:
-            level.level = request.json['level']            
+            level.level = request.json['level']
+
         DnsParentControlApi.db.session.commit()
+
+        if not (DnsParentControlApi.msg_queue is None):
+            logging.info('[API][Info] access level modified <owner=%s,device=%s,level=%s>',
+                level.owner,level.device,level.level)
+            DnsParentControlApi.msg_queue.put({"action": "clean_access_level_cache"})
+        
         return access_level_schema.dump(level)
 
     def delete(self, level_id):
@@ -136,6 +154,6 @@ DnsParentControlApi.api.add_resource(AcessLevelListResource, '/devices')
 DnsParentControlApi.api.add_resource(AccessLevelResource, '/devices/<int:id>')
 DnsParentControlApi.api.add_resource(DnsQueryListResource, '/dns-names')
 
-# main
-if __name__ == '__main__':
-    DnsParentControlApi.app.run(host='0.0.0.0',debug=True)
+# Main
+# if __name__ == '__main__':
+#     DnsParentControlApi(None).run()

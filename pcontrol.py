@@ -8,17 +8,19 @@ import json
 import sys
 import traceback
 import requests
+import pdb
 
-class DnsParentControl(object):
-    def __init__(self, log_level = 'INFO'):
+class DnsParentControlFw(object):
+    def __init__(self, queue):
         self.api_uri = '127.0.0.1:5000'
-        self.log_level = log_level
+        self.log_level = 'INFO'
         self.default_access_level = 2
         self.dns_cache = {}
         self.access_level_cache = {}
         self.runtime_cache = {}
-        self.load_cache('dns_cache')
-        self.load_cache('access_level_cache')
+        self.msg_queue = queue
+        logging.info('[FW][Info] Initialize: Starting %s', self.__class__.__name__)
+        # pdb.set_trace()
 
     def load_cache(self, cache_name):
         if cache_name == 'dns_cahe':
@@ -49,7 +51,7 @@ class DnsParentControl(object):
             if cache_name == 'runtime_cache':
                 self.runtime_cache.clear()
         except BaseException as e:
-            logging.error("[Error] CACHE: <cache_name=%s>", cache_name)
+            logging.error("[FW][Error] CACHE: <cache_name=%s>", cache_name)
             traceback.print_exc()
 
     def add_dns_cache(self, ip, row):
@@ -91,9 +93,10 @@ class DnsParentControl(object):
                     dns_name = self.api_request(request_type='post', body=values, namespace='dns-names')
                     del dns_name['dns_query_ip']
                     self.add_dns_cache(ip, dns_name)
-                    logging.info("# DNS LOG: fqdn=%s requested by %s", dns_name['dns_query_name'], self.dst)
+                    logging.info("[FW][Info] DNS LOG: fqdn=%s requested by %s",
+                                 dns_name['dns_query_name'], self.dst)
         except BaseException as e:
-            logging.error("[Error] DNS LOG: <src=%s>, <dst=%s> <rrname=%s> <rdata=%s> message: %s",
+            logging.error("[FW][Error] DNS LOG: <src=%s>, <dst=%s> <rrname=%s> <rdata=%s> message: %s",
                 self.src, self.dst, rrname, rdata, str(e))
             traceback.print_exc()
 
@@ -116,9 +119,10 @@ class DnsParentControl(object):
             # level:
             #   ALLOW-ALL-WEBSITES - accept packet to all websites
             #   DROP-ALL-WEBSITES - drop packet from any websites
-            #   ACCESS-LEVEL-0 - accept websites with access level 0 only = School related websites
-            #   ACCESS-LEVEL-1 - accept websites with access level 1 only = Popular Content (video, music, etc)
-            #   ACCESS-LEVEL-2 - accept websites with access level 2 only = Social Media (facebook, instagram, tiktok, etc)
+            #   ACCESS-LEVEL-0 - accept websites with access level 0 = School related websites
+            #   ACCESS-LEVEL-1 - accept websites with access level 0,1 = Popular Content (video, music, etc)
+            #   ACCESS-LEVEL-2 - accept websites with access level 0,1,2 = Social Media (facebook, instagram, tiktok, etc)
+            #   ACCESS-LEVEL-3 - accept websites with access level 0,1,2,3 = Restricted and inappropiate websites
             #
             access_level_key = self.access_level_cache.get(self.src)
             dns = self.dns_cache.get(self.dst)
@@ -131,7 +135,8 @@ class DnsParentControl(object):
                 dns_name = self.api_request(request_type='post', body=values, namespace='dns-names')
                 del dns_name['dns_query_ip']
                 self.add_dns_cache(self.dst ,dns_name)
-                logging.info("# DNS LOG: fqdn=%s requested by %s", 'unknown_dns_name', self.dst)
+                logging.info(
+                    "[FW][Info] DNS LOG: fqdn=%s requested by %s", 'unknown_dns_name', self.dst)
                 dns = self.dns_cache.get(self.dst)
 		
             if access_level_key:
@@ -139,26 +144,28 @@ class DnsParentControl(object):
                 if access_level_key.get('level') >= dns.get('level'):
                     raw_pkt.accept()
                     self.runtime_cache[runtime_key] = 'accept'
-                    logging.info("# WEB LOG: accept,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", 
+                    logging.info("[FW][Info] WEB LOG: accept,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", 
                         desc_key, dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
                     return 
                 else:
                     raw_pkt.drop()
                     self.runtime_cache[runtime_key] = 'drop'
-                    logging.info("# WEB LOG: drop,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>", 
+                    logging.info("[FW][Info] WEB LOG: drop,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>",
                         desc_key, dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
                     return
             # if host not in access_level then it is allowed
             raw_pkt.accept()
             self.runtime_cache[runtime_key] = 'accept'
-            logging.info("# WEB LOG: accept,(Other host) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=4>",
+            logging.info("[FW][Info] WEB LOG: accept,(Other host) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=4>",
                 dns.get('dns_query_name'), dns.get('level'), runtime_key)
         except BaseException as e:
-            logging.error("[Error] WEB LOG: <runtime_key=%s>, <access_level_key=%s> <dns=%s> message: %s",
+            logging.error("[FW][Error] WEB LOG: <runtime_key=%s>, <access_level_key=%s> <dns=%s> message: %s",
                 runtime_key, access_level_key, dns, str(e))
             traceback.print_exc()
 
     def packet_decider(self, raw_pkt):
+        if not (self.msg_queue is None) and not self.msg_queue.empty():
+            self.process_msg_action()
         packet = IP(raw_pkt.get_payload())
         self.src = packet.src
         self.dst = packet.dst
@@ -166,7 +173,7 @@ class DnsParentControl(object):
         self.dstport = str(packet.payload.dport)
 
         if self.log_level == 'DEBUG':
-            logging.debug("-> DEBUG: %s:%s, %s:%s",
+            logging.debug("[FW][Debug] -> %s:%s, %s:%s",
                 self.src, self.srcport, self.dst, self.dstport)
 
         if packet and DNS in packet and self.srcport == '53':
@@ -174,21 +181,34 @@ class DnsParentControl(object):
         if packet and (self.dstport == '80' or self.dstport == '443'):
             self.web_analyzer(packet, raw_pkt)
 
+    def process_msg_action(self):
+        while not self.msg_queue.empty():
+            msg = self.msg_queue.get()
+            logging.info("[FW][Info]: received message <%s>", msg)
+            if msg['action'] == 'clean_access_level_cache':
+                logging.info("[FW][Info]: processing msg from [API] <action=%s>", msg['action'])
+                self.load_cache('access_level_cache')
+            else:
+                logging.error("[FW][Error]: not able to match any action from msg <action=%s>", msg)
+
     def run(self):
+        self.load_cache('dns_cache')
+        self.load_cache('access_level_cache')
         nfqueue = NetfilterQueue()
         nfqueue.bind(0, self.packet_decider)
         try:
             nfqueue.run()
         except KeyboardInterrupt:
-            logging.info("Finishing nfqueue")
+            logging.info("[FW][Info] Finishing nfqueue")
         nfqueue.unbind()
         self.close()
 
-if __name__ == "__main__":
-    format = "%(asctime)s: %(message)s"
-    logging.basicConfig(format=format, level=logging.INFO,
-                        datefmt="%H:%M:%S")
-    logging.info("%s starting", __file__)
-    dpc = DnsParentControl()
-    dpc.run()
-    logging.info("%s finishing", __file__)
+# Main
+# if __name__ == "__main__":
+#     format = "%(asctime)s: %(message)s"
+#     logging.basicConfig(format=format, level=logging.INFO,
+#                         datefmt="%H:%M:%S")
+#     logging.info("%s starting", __file__)
+#     dpc = DnsParentControlFw(None)
+#     dpc.run()
+#     logging.info("%s finishing", __file__)
