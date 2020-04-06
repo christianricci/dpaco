@@ -61,8 +61,8 @@
 									<span class="badge badge-pill badge-success">No Access</span>
 								{:else if device.level == 0}
 									<span class="badge badge-pill badge-info">Level 0</span>
-								{:else if device.level == 1}
-									<span class="badge badge-pill badge-warning">Level 1</span>
+								<!-- {:else if device.level == 1}
+									<span class="badge badge-pill badge-warning">Level 1</span> -->
 								{:else}
 									<span class="badge badge-pill badge-danger">Level 2</span>
 								{/if}
@@ -75,9 +75,9 @@
 								<button type="submit" class="btn btn-info btn-xs" on:click|preventDefault={updateDevice(device, 0)}>
 									Level 0
 								</button>
-								<button type="submit" class="btn btn-warning btn-xs" on:click|preventDefault={updateDevice(device, 1)}>
+								<!-- <button type="submit" class="btn btn-warning btn-xs" on:click|preventDefault={updateDevice(device, 1)}>
 									Level 1
-								</button>
+								</button> -->
 								<button type="submit" class="btn btn-danger btn-xs" on:click|preventDefault={updateDevice(device, 2)}>
 									Level 2
 								</button>

@@ -8,22 +8,46 @@ import json
 import sys
 import traceback
 import requests
+import dns.resolver
 import pdb
+
+# Analize packet, decide and populate runtime_cache
+# level:
+#   ALLOW-ALL-WEBSITES - accept packet to all websites
+#   DROP-ALL-WEBSITES - drop packet from any websites
+#   ACCESS-LEVEL-0 - accept websites with access level 0 = School related websites
+#   ACCESS-LEVEL-1 - accept websites with access level 0,1 = Popular Content (video, music, etc) + Social Media (facebook, instagram, tiktok, etc)
+#   ACCESS-LEVEL-2 - accept websites with access level 0,1,2 = Restricted and inappropiate websites
 
 class DnsParentControlFw(object):
     def __init__(self, queue):
-        self.api_uri = '127.0.0.1:5000'
         self.log_level = 'INFO'
-        self.default_access_level = 2
+        # UI Server
+        self.api_uri = '127.0.0.1:5000'
+        # Lan Network preffic (first 3 octets)
+        self.lan_network_preffix = '192.168.1.'
+        # OpenDNS name server resolvers
+        self.odns_nameserver_resolvers = ['208.67.222.222', '208.67.220.220']
+        # https://support.opendns.com/hc/en-us/articles/227986927-What-are-the-Cisco-Umbrella-Block-Page-IP-Addresses-
+        self.odns_content_category_block_page_ip = '146.112.61.106'
+        # ACCESS-LEVEL-0 - accept websites with access level 0 = School related websites
+        self.default_access_level = 0
+        # ACCESS-LEVEL-3 - accept websites with access level 0,1,2 = Restricted and inappropiate websites
+        self.default_max_access_level = 2
+        # Process queue message
+        self.msg_queue = queue
+        # Handle Cache
         self.dns_cache = {}
         self.access_level_cache = {}
         self.runtime_cache = {}
-        self.msg_queue = queue
-        logging.info('[FW][Info] Initialize: Starting %s', self.__class__.__name__)
-        # pdb.set_trace()
+        # Load Cache
+        logging.info('[FW][Info] Initialize: loading cache %s', self.__class__.__name__)
+        self.load_cache('dns_cache')
+        self.load_cache('access_level_cache')
+        logging.info('[FW][Info] Initialize: Started %s', self.__class__.__name__)
 
     def load_cache(self, cache_name):
-        if cache_name == 'dns_cahe':
+        if cache_name == 'dns_cache':
             # load dns cache
             dns_names = self.api_request(request_type='get', namespace='dns-names')
             if dns_names:
@@ -31,6 +55,7 @@ class DnsParentControlFw(object):
                     ip_address = row['dns_query_ip']
                     del row['dns_query_ip']            
                     self.dns_cache[ip_address] = row
+
         if cache_name == 'access_level_cache':
             # load access_level cache
             levels = self.api_request(request_type='get', namespace='devices')
@@ -66,6 +91,9 @@ class DnsParentControlFw(object):
 
         if request_type == 'post':
             r = requests.post(url, data=body, headers=headers)
+        elif request_type == 'delete':
+            requests.delete(url, data=body, headers=headers)
+            return None
         else:
             r = requests.get(url, headers=headers)
         return r.json()
@@ -73,7 +101,7 @@ class DnsParentControlFw(object):
     def dns_analyzer(self, dns_answer, raw_pkt):
         try:
             raw_pkt.accept()
-
+            # Build DNS Tree
             full_dns_list = ''
             for x in range(dns_answer[DNS].ancount):
                 rrname = dns_answer[DNSRR][x].rrname
@@ -82,19 +110,28 @@ class DnsParentControlFw(object):
                     (rdata.decode('utf8') if type(rdata) == bytes else rdata)
                 if (x + 1) < dns_answer[DNS].ancount:
                     full_dns_list += '|'
+            # Add to Cache and save into db
             re_c = re.compile(r'[0-9]*\.[0-9]*\.[0-9]*\.[0-9]*')
             for ip in list(filter(re_c.search, [alias.split(':')[-1] for alias in full_dns_list.split('|')])):
-                if not ip in self.dns_cache.keys():
-                    values = '{{"dns_query_name": "{dns_query_name}","dns_query_ip": "{dns_query_ip}","full_dns_alias_tree": "{full_dns_alias_tree}","level": {level}}}'\
-                        .format(dns_query_name=full_dns_list.split(':')[0],
-                                dns_query_ip=ip,
-                                full_dns_alias_tree=full_dns_list,
-                                level=self.default_access_level)
-                    dns_name = self.api_request(request_type='post', body=values, namespace='dns-names')
-                    del dns_name['dns_query_ip']
-                    self.add_dns_cache(ip, dns_name)
-                    logging.info("[FW][Info] DNS LOG: fqdn=%s requested by %s",
-                                 dns_name['dns_query_name'], self.dst)
+                if ip.__contains__(self.lan_network_preffix):
+                    continue
+                # Associate the IP with the top CNAME
+                dns_query_name = full_dns_list.split(':')[0]
+                if not self.dns_cache.get(ip) or self.dns_cache.get(ip) != dns_query_name:
+                    level = self.opendns_checker(dns_query_name)
+                    count = self.dns_cache.get(ip)['count'] + 1 if self.dns_cache.get(ip) else 1
+                    values = '{{"dns_query_name": "{dns_query_name}","dns_query_ip": "{dns_query_ip}",\
+                                "full_dns_alias_tree": "{full_dns_alias_tree}","level": {level},"count": {count}}}'\
+                             .format(dns_query_name=dns_query_name,
+                                     dns_query_ip=ip,
+                                     full_dns_alias_tree=full_dns_list,
+                                     level=level,
+                                     count=count)
+                    self.add_dns_cache(ip, json.loads(values))
+                    # Update Database every 5 repetitions
+                    if count == 1 or count % 5 == 0:
+                        if self.api_request(request_type='post', body=values, namespace='dns-names'):
+                            logging.info("[FW][Info] DNS LOG: fqdn=%s requested by %s", dns_query_name, self.dst)
         except BaseException as e:
             logging.error("[FW][Error] DNS LOG: <src=%s>, <dst=%s> <rrname=%s> <rdata=%s> message: %s",
                 self.src, self.dst, rrname, rdata, str(e))
@@ -114,29 +151,29 @@ class DnsParentControlFw(object):
                 else:
                     raw_pkt.drop()
                     return
-
-            # Analize packet, decide and populate runtime_cache
-            # level:
-            #   ALLOW-ALL-WEBSITES - accept packet to all websites
-            #   DROP-ALL-WEBSITES - drop packet from any websites
-            #   ACCESS-LEVEL-0 - accept websites with access level 0 = School related websites
-            #   ACCESS-LEVEL-1 - accept websites with access level 0,1 = Popular Content (video, music, etc)
-            #   ACCESS-LEVEL-2 - accept websites with access level 0,1,2 = Social Media (facebook, instagram, tiktok, etc)
-            #   ACCESS-LEVEL-3 - accept websites with access level 0,1,2,3 = Restricted and inappropiate websites
-            #
+            # Accept if destination is Local Lan
+            if self.dst.__contains__(self.lan_network_preffix):
+                raw_pkt.accept()
+                return
+            # Check the user access level against the dst ip level
             access_level_key = self.access_level_cache.get(self.src)
             dns = self.dns_cache.get(self.dst)
             if not dns:
-                values = '{{"dns_query_name": "{dns_query_name}","dns_query_ip": "{dns_query_ip}","full_dns_alias_tree": "{full_dns_alias_tree}","level": {level}}}'\
-                    .format(dns_query_name='unknown_dns_name',
-                            dns_query_ip=self.dst,
-                            full_dns_alias_tree='unknown_dns_name',
-                            level=self.default_access_level)                
-                dns_name = self.api_request(request_type='post', body=values, namespace='dns-names')
-                del dns_name['dns_query_ip']
-                self.add_dns_cache(self.dst ,dns_name)
-                logging.info(
-                    "[FW][Info] DNS LOG: fqdn=%s requested by %s", 'unknown_dns_name', self.dst)
+                # Handle when request that doesn't have a DNS, example direct IP request
+                dns_query_name = 'unknown_dns_name'
+                count = 1
+                values = '{{"dns_query_name": "{dns_query_name}","dns_query_ip": "{dns_query_ip}",\
+                         "full_dns_alias_tree": "{full_dns_alias_tree}","level": {level},"count": {count}}}'\
+                            .format(dns_query_name=dns_query_name,
+                                    dns_query_ip=self.dst,
+                                    full_dns_alias_tree=dns_query_name,
+                                    level=self.default_access_level,
+                                    count=count)
+                self.add_dns_cache(self.dst, json.loads(values))
+                # Update Database every 5 repetitions
+                if count == 1 or count % 5 == 0:
+                    if self.api_request(request_type='post', body=values, namespace='dns-names'):
+                        logging.info("[FW][Info] DNS LOG: fqdn=%s requested by %s", dns_query_name, self.dst)
                 dns = self.dns_cache.get(self.dst)
 		
             if access_level_key:
@@ -153,6 +190,7 @@ class DnsParentControlFw(object):
                     logging.info("[FW][Info] WEB LOG: drop,(%s) <fqdn=%s,fqdn_level=%s,src=%s> <user_level=%s>",
                         desc_key, dns.get('dns_query_name'), dns.get('level'), runtime_key, access_level_key.get('level'))
                     return
+
             # if host not in access_level then it is allowed
             raw_pkt.accept()
             self.runtime_cache[runtime_key] = 'accept'
@@ -195,9 +233,22 @@ class DnsParentControlFw(object):
             else:
                 logging.error("[FW][Error]: not able to match any action from msg <action=%s>", msg)
 
+    def opendns_checker(self, name):
+        level = self.default_access_level
+        # OpenDNS nameservers
+        resolver = dns.resolver.Resolver()
+        resolver.nameservers = self.odns_nameserver_resolvers
+        try:
+            answer = resolver.query(name, 'a')[0].to_text().__contains__(self.odns_content_category_block_page_ip)
+            if answer:
+                level = self.default_max_access_level
+                logging.info('[FW][Info] %s rejected by OpenDNS, set level to %s', name, level)
+        except BaseException as e:
+            logging.error("[FW][Error] while resolving %s", name)
+            traceback.print_exc()
+        return level
+
     def run(self):
-        self.load_cache('dns_cache')
-        self.load_cache('access_level_cache')
         nfqueue = NetfilterQueue()
         nfqueue.bind(0, self.packet_decider)
         try:

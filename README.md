@@ -22,6 +22,11 @@ iptables -F FORWARD -v
 iptables -P OUTPUT ACCEPT
 iptables -P INPUT ACCEPT
 iptables -P FORWARD ACCEPT
+# Allow OpenDNS
+iptables -A INPUT -s 208.67.222.222 -j ACCEPT
+iptables -A INPUT -d 208.67.222.222 -j ACCEPT
+iptables -A INPUT -s 208.67.220.220 -j ACCEPT
+iptables -A INPUT -d 208.67.220.220 -j ACCEPT
 # Get all the DNS Answers coming from source port 53
 iptables -A INPUT -p udp --sport 53 -j NFQUEUE --queue-num 0 --queue-bypass
 # Get all request to dest port 80, 443
@@ -79,6 +84,11 @@ opkg install iptables-mod-nfqueue
 ```
 #### openwrt - add custom rule ####
 ```shell
+# Allow OpenDNS
+/usr/sbin/iptables -A output_rule -s 208.67.222.222 -j ACCEPT
+/usr/sbin/iptables -A output_rule -d 208.67.222.222 -j ACCEPT
+/usr/sbin/iptables -A output_rule -s 208.67.220.220 -j ACCEPT
+/usr/sbin/iptables -A output_rule -d 208.67.220.220 -j ACCEPT
 # Get all the DNS Answers coming from source port 53
 /usr/sbin/iptables -A output_rule -o br-lan -p udp --sport 53 -j NFQUEUE --queue-num 0 --queue-bypass
 # Get all request to dest port 80, 443

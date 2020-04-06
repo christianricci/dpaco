@@ -1,8 +1,10 @@
 from flask import Flask, request, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import exc
 from flask_marshmallow import Marshmallow
 from flask_restful import Api, Resource
 import logging
+import pdb
 
 # Thanks rahmanfadhil. This is Based on https://github.com/rahmanfadhil/flask-rest-api/blob/master/main.py
 # Migration:
@@ -40,7 +42,7 @@ class AccessLevel(DnsParentControlApi.db.Model):
     level = DnsParentControlApi.db.Column(DnsParentControlApi.db.Integer, default=2)
 
     def __repr__(self):
-        return '<AccessLevel %s>' % self.description
+        return '<AccessLevel %s>' % self.device
 
 class AccessLevelSchema(DnsParentControlApi.ma.Schema):
     class Meta:
@@ -55,13 +57,15 @@ class DnsQuery(DnsParentControlApi.db.Model):
     dns_query_ip = DnsParentControlApi.db.Column(DnsParentControlApi.db.Text)
     full_dns_alias_tree = DnsParentControlApi.db.Column(DnsParentControlApi.db.Text)
     level = DnsParentControlApi.db.Column(DnsParentControlApi.db.Integer, default=2)
+    count = DnsParentControlApi.db.Column(DnsParentControlApi.db.Integer)
+    DnsParentControlApi.db.UniqueConstraint(dns_query_name, dns_query_ip, name='uix_1')
 
     def __repr__(self):
-        return '<DnsQuery %s>' % self.description
+        return '<DnsQuery %s>' % self.dns_query_name
 
 class DnsQuerySchema(DnsParentControlApi.ma.Schema):
     class Meta:
-        fields = ("id", "dns_query_name", "dns_query_ip", "full_dns_alias_tree", "level")
+        fields = ("id", "dns_query_name", "dns_query_ip", "full_dns_alias_tree", "level", "count")
 
 dns_query_schema = DnsQuerySchema()
 dns_queries_schema = DnsQuerySchema(many=True)
@@ -111,13 +115,12 @@ class AccessLevelResource(Resource):
                 level.owner,level.device,level.level)
             DnsParentControlApi.msg_queue.put({"action": "clean_access_level_cache"})
             DnsParentControlApi.msg_queue.put({"action": "clean_runtime_cache"})
-
-        
+                 
         return access_level_schema.dump(level)
 
     def delete(self, level_id):
         level = AccessLevel.query.get_or_404(level_id)
-        level.delete()
+        DnsParentControlApi.db.session.delete(level)
         DnsParentControlApi.db.session.commit()
         return '', 204
 
@@ -131,11 +134,26 @@ class DnsQueryListResource(Resource):
             dns_query_name=request.json['dns_query_name'],
             dns_query_ip=request.json['dns_query_ip'],
             full_dns_alias_tree=request.json['full_dns_alias_tree'],
-            level=request.json['level']
+            level=request.json['level'],
+            count=request.json['count']
         )
-        DnsParentControlApi.db.session.add(new_dns_name)
+        # DnsParentControlApi.db.session.add(new_dns_name)
+        # DnsParentControlApi.db.session.commit()
+        # return dns_query_schema.dump(new_dns_name)
+        try:
+            DnsParentControlApi.db.session.add(new_dns_name)
+            DnsParentControlApi.db.session.commit()
+            return dns_query_schema.dump(new_dns_name)
+        except exc.IntegrityError:
+            # Record already exists
+            return None
+
+class DnsQueryResource(Resource):
+    def delete(self, dns_query_ip):
+        dns_name = DnsQuery.query.filter_by(dns_query_ip=dns_query_ip).first_or_404()
+        DnsParentControlApi.db.session.delete(dns_name)
         DnsParentControlApi.db.session.commit()
-        return dns_query_schema.dump(new_dns_name)
+        return '', 204
 
 # Routes
 
@@ -155,6 +173,7 @@ def home(path):
 DnsParentControlApi.api.add_resource(AcessLevelListResource, '/devices')
 DnsParentControlApi.api.add_resource(AccessLevelResource, '/devices/<int:id>')
 DnsParentControlApi.api.add_resource(DnsQueryListResource, '/dns-names')
+DnsParentControlApi.api.add_resource(DnsQueryResource, '/dns-names/<string:dns_query_ip>')
 
 # Main
 # if __name__ == '__main__':
